@@ -1,109 +1,119 @@
 from flask import Flask, request, jsonify
-import threading
-import sqlite3
 import json
+import random
+import time
+import threading
+from concurrent.futures import ThreadPoolExecutor
 
 app = Flask(__name__)
 
-# Mutex for thread-safe operations
-mutex = threading.Lock()
+# Use a lock for thread-safe file access
+lock = threading.Lock()
+STATS_FILE = 'request_stats.txt'
 
-# Database setup for storing statistics
-# Assuming a table 'statistics' with columns 'username' and 'request_count'
-DATABASE = 'server.db'
+# Initialize the stats file
+def init_stats_file():
+    with lock:
+        try:
+            with open(STATS_FILE, 'r') as file:
+                pass
+        except FileNotFoundError:
+            with open(STATS_FILE, 'w') as file:
+                json.dump({}, file)
 
-def init_db():
-    with sqlite3.connect(DATABASE) as conn:
-        conn.execute('''CREATE TABLE IF NOT EXISTS statistics
-                     (username TEXT PRIMARY KEY, request_count INTEGER)''')
-    print("Database initialized")
-
-# Helper function to update statistics
 def update_statistics(username):
-    with mutex:
-        with sqlite3.connect(DATABASE) as conn:
-            cur = conn.cursor()
-            # Check if user exists
-            cur.execute('SELECT request_count FROM statistics WHERE username = ?', (username,))
-            result = cur.fetchone()
-            if result:
-                # Update existing user's count
-                cur.execute('UPDATE statistics SET request_count = request_count + 1 WHERE username = ?', (username,))
-            else:
-                # Insert new user with a count of 1
-                cur.execute('INSERT INTO statistics (username, request_count) VALUES (?, 1)', (username,))
-            conn.commit()
+    with lock:
+        with open(STATS_FILE, 'r') as file:
+            stats = json.load(file)
+        stats[username] = stats.get(username, 0) + 1
+        with open(STATS_FILE, 'w') as file:
+            json.dump(stats, file)
 
-# Route for the pi service
-@app.route('/quote', methods=['POST'])
+
+
+# Function to validate user credentials
+def validate_user(username, password):
+    if not username or not password:
+        return False
+    if len(username) != 4 or not username.isdigit():
+        return False
+    if password != f"{username}-pw":
+        return False
+    return True
+
+# Function to validate level of simulation
+#An integer from 100 to 100,000,000, both inclusive.
+def is_valid_simulations(simulations):
+    if simulations is None or not isinstance(simulations, int):
+        return False, 'missing field simulations'
+    if not 100 <= simulations <= 100000000:
+        return False, 'invalid field simulations'
+    return True, ''
+
+# Function to validate level of concurrency
+#An integer from 1 to 8 both inclusive.
+def is_valid_concurrency(concurrency):
+    if concurrency is None:
+        concurrency = 1
+    if not isinstance(concurrency, int) or not 1 <= concurrency <= 8:
+        return False, 'invalid field concurrency'
+    return True, ''
+
+# adjust as lab01 did would be better!!!
+# Function to perform Monte Carlo simulation of π
+def monte_carlo_pi_simulation(samples):
+    inside_circle = 0
+    for _ in range(samples):
+        x, y = random.random(), random.random()
+        if x * x + y * y <= 1:
+            inside_circle += 1
+    return inside_circle
+
+# Endpoint to calculate π using Monte Carlo simulation
 @app.route('/pi', methods=['POST'])
-def pi_service():
-    # Parse and validate request JSON
-    data = request.get_json()
-    username = data.get('username')
-    password = data.get('password')  # Add more validation as per your requirements
-    simulations = data.get('simulations')
-    concurrency = data.get('concurrency', 1)  # Default to 1 if not provided
-
-    # Update statistics
-    update_statistics(username)
-
-    # Perform Monte Carlo simulation to calculate pi
-    # Implement the Monte Carlo simulation logic here
-    calculated_pi = 3.14  # Placeholder for the actual calculated value
-
-    response_data = {
-        'username': username,
-        'simulations': simulations,
-        'concurrency': concurrency,
-        'calculated_pi': calculated_pi,
-        # Add more fields as required
-    }
-    return jsonify(response_data)
-def handle_request():
+def calculate_pi():
     data = request.get_json()
     username = data.get('username')
     password = data.get('password')
-
-    if not username or not password:
+    simulations = data.get('simulations')
+    concurrency = data.get('concurrency', 1)
+    
+    # Validate user credentials
+    if not validate_user(username, password):
         return jsonify({'error': 'user info error'}), 401
 
-    if len(username) != 4 or not username.isdigit():
-        return jsonify({'error': 'user info error'}), 401 
+    # Validate number of simulations and concurrency
+    is_valid, error_msg = is_valid_simulations(simulations)
+    if not is_valid:
+        return jsonify({'error': error_msg}), 400
 
-    if password != f"{username}-pw":
-        return jsonify({'error': 'user info error'}), 401
+    is_valid, error_msg = is_valid_concurrency(concurrency)
+    if not is_valid:
+        return jsonify({'error': error_msg}), 400
 
-    # User info is valid, proceed to R3 and R4
-    # This is a placeholder response 
-    return jsonify({'message': 'User is authenticated, further implementation pending.'})
+    # Start the Monte Carlo simulation
+    start_time = time.time()
+    samples_per_thread = simulations // concurrency
+    with ThreadPoolExecutor(max_workers=concurrency) as executor:
+        futures = [executor.submit(monte_carlo_pi_simulation, samples_per_thread) for _ in range(concurrency)]
+        inside_circle_count = sum(f.result() for f in futures)
+    pi_estimate = (4.0 * inside_circle_count) / simulations
+    elapsed_time = time.time() - start_time
 
-# Route for the quote service
-# @app.route('/quote', methods=['POST'])
-# def quote_service():
-#     # Parse and validate request JSON
-#     data = request.get_json()
-#     username = data.get('username')
-#     password = data.get('password')  # Add more validation as per your requirements
-#     protocol = data.get('protocol')
-#     concurrency = data.get('concurrency', 1)  # Default to 1 if not provided
+    # Update request statistics
+    update_statistics(username)
 
-#     # Update statistics
-#     update_statistics(username)
+    # Return the results
+    return jsonify({
+        'number_of_simulations': simulations,
+        'level_of_concurrency': concurrency,
+        'calculated_value_of_pi': pi_estimate,
+        'measured_time_for_processing_request': elapsed_time
+    })
 
-#     # Retrieve quotes using the provided quote_server.py logic
-#     # You need to implement the logic to interact with the quote server
-#     quotes = ["Life is what happens when you're busy making other plans."]  # Placeholder for actual quotes
+# Initialize the stats file
+init_stats_file()
 
-#     response_data = {
-#         'username': username,
-#         'protocol': protocol,
-#         'concurrency': concurrency,
-#         'quotes': quotes,
-#         # Add more fields as required
-#     }
-#     return jsonify(response_data)
-
+# Start the Flask application
 if __name__ == '__main__':
-    init_db()
-    app.run(debug=True)
+    app.run(host='0.0.0.0', port=5000)
