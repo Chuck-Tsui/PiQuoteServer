@@ -41,7 +41,7 @@ def validate_user(username, password):
         return False
     return True
 
-# adjust as lab01 did would be better!!!
+
 # Function to perform Monte Carlo simulation of π
 def monte_carlo_pi_simulation(samples):
     inside_circle = 0
@@ -49,7 +49,7 @@ def monte_carlo_pi_simulation(samples):
         x, y = random.random(), random.random()
         if x * x + y * y <= 1:
             inside_circle += 1
-    return inside_circle
+    return inside_circle / samples * 4
 
 # Function to calculate π using Monte Carlo simulation
 @app.route('/pi', methods=['POST'])
@@ -79,8 +79,8 @@ def calculate_pi():
     samples_per_thread = simulations // concurrency
     with ThreadPoolExecutor(max_workers=concurrency) as executor:
         futures = [executor.submit(monte_carlo_pi_simulation, samples_per_thread) for _ in range(concurrency)]
-        inside_circle_count = sum(f.result() for f in futures)
-    pi_estimate = (4.0 * inside_circle_count) / simulations
+        pi_estimates = [future.result() for future in futures]
+        avg_pi_estimate = sum(pi_estimates) / concurrency
     elapsed_time = time.time() - start_time
 
     # Update request statistics
@@ -90,7 +90,7 @@ def calculate_pi():
     return jsonify({
         'number_of_simulations': simulations,
         'level_of_concurrency': concurrency,
-        'calculated_value_of_pi': pi_estimate,
+        'calculated_value_of_pi': avg_pi_estimate,
         'measured_time_for_processing_request': elapsed_time
     })
 
